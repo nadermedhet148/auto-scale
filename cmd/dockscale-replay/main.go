@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"dockscale/internal/config"
+	"dockscale/internal/memory"
 	"dockscale/internal/replay"
 )
 
@@ -49,12 +50,13 @@ func generate(args []string) error {
 	spike := fs.Float64("spike-p", 0.002, "per-tick probability of a 2.5x spike lasting 3 ticks")
 	cpuPerRPS := fs.Float64("cpu-per-rps", 0.5, "CPU % consumed per request/sec")
 	seed := fs.Uint64("seed", 1, "random seed")
+	shape := fs.String("shape", "sine", "daily pattern: sine (smooth ramp) or step (09:00-17:00 business hours)")
 	_ = fs.Parse(args)
 
 	rows := replay.Synthesize(*service, replay.SynthOptions{
 		Start:    time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC),
 		Duration: time.Duration(*days * float64(24*time.Hour)),
-		Interval: *interval, Base: *base, Peak: *peak, Noise: *noise, SpikeP: *spike, Seed: *seed,
+		Shape:    *shape, Interval: *interval, Base: *base, Peak: *peak, Noise: *noise, SpikeP: *spike, Seed: *seed,
 	}, *cpuPerRPS)
 	f, err := os.Create(*out)
 	if err != nil {
@@ -77,13 +79,14 @@ func simulate(args []string) error {
 	start := fs.Int("start", 0, "initial replicas (default: min)")
 	startup := fs.Duration("startup-delay", 10*time.Second, "time before a new replica takes load")
 	timeline := fs.String("timeline", "", "write a per-tick CSV for the first config")
+	memDir := fs.String("memory-dir", "", "write the first config's decision journal and learned state here, for dockscale-memory")
 	_ = fs.Parse(args)
 	if len(configs) == 0 {
 		configs = multiFlag{"examples/dockscale.yaml"}
 	}
 
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', tabwriter.AlignRight)
-	fmt.Fprintln(tw, "config\tmodel\tticks\tscale-ups\tscale-downs\tpeak\treplica-h\toverload\toverload %\t")
+	fmt.Fprintln(tw, "config\tmodel\tprewarm\tscale-ups\tscale-downs\tpeak\treplica-h\toverload\toverload %\tups eff/insuf/unnec\tdowns ok/prem\t")
 	var recordedHours float64
 	for i, path := range configs {
 		cfg, err := config.Load(path)
@@ -107,7 +110,21 @@ func simulate(args []string) error {
 			return fmt.Errorf("%s has no rows for service %q", *in, sc.Name)
 		}
 
-		ticks, sum := replay.Simulate(sc, cfg.Interval, rows, replay.Options{Start: *start, StartupDelay: *startup})
+		opt := replay.Options{Start: *start, StartupDelay: *startup, EvaluateAfter: cfg.Memory.EvaluateAfter}
+		var store *memory.Store
+		if i == 0 && *memDir != "" {
+			if store, err = memory.Open(*memDir); err != nil {
+				return err
+			}
+			opt.Journal = func(r memory.Record) { _ = store.Append(r) }
+		}
+		ticks, sum := replay.Simulate(sc, cfg.Interval, rows, opt)
+		if store != nil {
+			if err := store.SaveState(sc.Name, sum.Final); err != nil {
+				return err
+			}
+			store.Close()
+		}
 		if sum.IntervalWarning {
 			fmt.Fprintf(os.Stderr, "warning: %s: recording spacing %v differs from interval %v; cooldowns and forecasts will be off\n",
 				path, sum.MedianStep, cfg.Interval)
@@ -116,8 +133,10 @@ func simulate(args []string) error {
 		if sum.Duration > 0 {
 			pct = 100 * float64(sum.OverloadTime) / float64(sum.Duration)
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%d\t%d\t%.1f\t%s\t%.2f\t\n", path, sc.Model.Kind, sum.Ticks,
-			sum.ScaleUps, sum.ScaleDowns, sum.PeakReplicas, sum.ReplicaHours, sum.OverloadTime.Round(time.Second), pct)
+		v := sum.Verdicts
+		fmt.Fprintf(tw, "%s\t%s\t%v\t%d\t%d\t%d\t%.1f\t%s\t%.2f\t%d/%d/%d\t%d/%d\t\n", path, sc.Model.Kind, sc.History.Prewarm,
+			sum.ScaleUps, sum.ScaleDowns, sum.PeakReplicas, sum.ReplicaHours, sum.OverloadTime.Round(time.Second), pct,
+			v[memory.VerdictEffective], v[memory.VerdictInsufficient], v[memory.VerdictUnnecessary], v[memory.VerdictOK], v[memory.VerdictPremature])
 		recordedHours = sum.RecordedHours
 
 		if i == 0 && *timeline != "" {

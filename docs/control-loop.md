@@ -20,11 +20,18 @@ sequenceDiagram
     opt -record given
         main->>main: open recording CSV
     end
-    main->>ctl: New(cfg, docker, recorder)
+    opt memory.dir set
+        main->>main: open memory store
+    end
+    main->>ctl: New(cfg, docker, recorder, memory)
     Note over ctl: one Engine per service,<br/>Traefik scraper and queue source if used
+    opt memory store
+        ctl->>ctl: restore state-<service>.json into each Engine<br/>load recent journal entries for /history
+    end
     main->>http: ListenAndServe(listen)
     main->>ctl: Run(ctx), blocks until SIGINT or SIGTERM
     ctl-->>main: ctx cancelled
+    main->>ctl: Close(): save every service's learned state
     main->>http: Shutdown (5s)
     Note over main: replicas are left running,<br/>the next start adopts them
 ```
@@ -60,6 +67,7 @@ sequenceDiagram
     ctl->>eng: Step(now, current, perReplica)
     Note over eng: per metric: outlier filter, then estimator<br/>then policy.Decide
     eng-->>ctl: signals, Decision{Recommended, Desired, Reason}
+    Note over ctl: grade decisions whose evaluation window ended<br/>snapshot state if snapshot_every has passed
     alt Desired == current
         Note over ctl: hold (logged at debug level)
     else dry_run
@@ -69,6 +77,9 @@ sequenceDiagram
         ctl->>dk: Start × n  or  Remove(newest) × n, in parallel
         dk-->>ctl: replicas actually reached
         ctl->>eng: Commit(now, current, reached)
+    end
+    opt an action was taken (or would be, in dry run)
+        ctl->>ctl: journal the decision, start watching its outcome
     end
     Note over ctl: publish Status for /status and /metrics
 ```
@@ -89,7 +100,9 @@ sequenceDiagram
 4. **Record** (optional). Append the service-wide totals to the recording CSV
    for later replay (see [replay.md](replay.md)).
 5. **Estimate.** Each metric's value goes through its own pipeline: outlier
-   filter, then estimator (see [models.md](models.md)).
+   filter, then estimator (see [models.md](models.md)). The service-wide totals
+   also update the load profile, and with `history.prewarm` it adds
+   `metric@history` signals (see [memory.md](memory.md)).
 6. **Decide.** The policy turns the estimates into a desired replica count (see
    [policy.md](policy.md)).
 7. **Act.** Start or remove the difference in parallel. Scale-down removes the
@@ -97,7 +110,10 @@ sequenceDiagram
 8. **Commit.** Tell the policy what actually happened, which starts the
    cooldowns. dockscale commits the replica count it actually *reached*, not the
    one it asked for.
-9. **Publish.** Store the `Status` (replicas, recommendation, signals, reason,
+9. **Remember.** Grade earlier decisions whose `evaluate_after` window has
+   ended, journal this tick's decision if there was one, and save a state
+   snapshot every `snapshot_every`.
+10. **Publish.** Store the `Status` (replicas, recommendation, signals, reason,
    last error) for the HTTP endpoints.
 
 ## Decision flow
@@ -186,7 +202,8 @@ sequenceDiagram
 | Only some starts succeed | dockscale commits the count it reached, so the scale-up cooldown starts and there's no retry storm. The error is logged and surfaced. It retries after the cooldown. |
 | Image pull fails | Counts as a failed start (as above). |
 | A replica is removed by hand | It no longer appears in the list, so it's replaced on the next tick if the policy wants it. |
-| dockscale crashes or restarts | Replicas keep running and are adopted by label. Model state is lost: the estimators warm up again, and Holt-Winters relearns its season. |
+| dockscale crashes or restarts | Replicas keep running and are adopted by label. With `memory.dir`, learned state is restored from the last snapshot (at most `snapshot_every` old after a crash). Without it, the estimators warm up again and Holt-Winters relearns its season. |
+| Memory directory not writable | Startup fails if it can't be opened. Later write failures are logged as warnings and scaling continues. |
 | A tick is slower than the interval | At most one missed tick is kept, the rest are dropped. Observation uses a timeout of one interval; scaling actions get up to 3 minutes. |
 | Stopped (not crashed) replica | Removed during cleanup, then replaced if still needed. |
 

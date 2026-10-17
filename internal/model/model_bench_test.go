@@ -4,6 +4,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"testing"
+	"time"
 )
 
 // samples is a fixed noisy series so every benchmark sees identical input.
@@ -20,7 +21,7 @@ func benchEstimator(b *testing.B, e Estimator) {
 	b.ReportAllocs()
 	var sink float64
 	for i := 0; b.Loop(); i++ {
-		sink += e.Update(samples[i%len(samples)])
+		sink += e.Update(time.Unix(int64(i)*10, 0), samples[i%len(samples)])
 	}
 	_ = sink
 }
@@ -31,9 +32,9 @@ func BenchmarkHolt(b *testing.B) { benchEstimator(b, &Holt{Alpha: 0.5, Beta: 0.3
 
 // A daily season at a 10s interval: 8640 seasonal slots.
 func BenchmarkHoltWintersDaily(b *testing.B) {
-	hw := &HoltWinters{Alpha: 0.5, Beta: 0.3, Gamma: 0.2, Period: 8640, Horizon: 3}
+	hw := &HoltWinters{Alpha: 0.5, Beta: 0.3, Gamma: 0.2, SeasonLength: 24 * time.Hour, Interval: 10 * time.Second, Horizon: 3}
 	for i := range 8640 {
-		hw.Update(samples[i%len(samples)]) // finish warm-up outside the timer
+		hw.Update(time.Unix(int64(i)*10, 0), samples[i%len(samples)]) // finish warm-up outside the timer
 	}
 	benchEstimator(b, hw)
 }

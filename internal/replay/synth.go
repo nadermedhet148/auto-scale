@@ -8,9 +8,14 @@ import (
 	"dockscale/internal/config"
 )
 
-// SynthOptions shapes a synthetic request-rate recording: a daily sine
-// wave between Base and Peak rps, Gaussian noise, and occasional spikes.
+// SynthOptions shapes a synthetic request-rate recording: a daily pattern
+// between Base and Peak rps, Gaussian noise, and occasional spikes.
+//
+// Shape "sine" ramps smoothly (trough 03:00, peak 15:00). Shape "step" is
+// business hours: Base until 09:00, an abrupt jump to Peak, and back to Base
+// at 17:00. That is the case history prewarm is designed for.
 type SynthOptions struct {
+	Shape    string // "sine" (default) or "step"
 	Start    time.Time
 	Duration time.Duration
 	Interval time.Duration
@@ -31,8 +36,14 @@ func Synthesize(service string, o SynthOptions, cpuPerRPS float64) []Row {
 	for i := range n {
 		at := o.Start.Add(time.Duration(i) * o.Interval)
 		hour := float64(at.Hour()) + float64(at.Minute())/60
-		// Trough at 03:00, peak at 15:00.
-		phase := (1 - math.Cos(2*math.Pi*(hour-3)/24)) / 2
+		var phase float64
+		if o.Shape == "step" {
+			if hour >= 9 && hour < 17 {
+				phase = 1
+			}
+		} else {
+			phase = (1 - math.Cos(2*math.Pi*(hour-3)/24)) / 2 // trough 03:00, peak 15:00
+		}
 		rps := o.Base + (o.Peak-o.Base)*phase
 		rps *= 1 + o.Noise*rng.NormFloat64()
 		if spikeLeft == 0 && rng.Float64() < o.SpikeP {

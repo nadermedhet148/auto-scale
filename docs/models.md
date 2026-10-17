@@ -93,11 +93,11 @@ The forecast is floored at 0. A falling trend can't produce negative load.
 ## Holt-Winters: triple exponential smoothing (additive)
 
 Holt-Winters adds a **seasonal** part: one offset `s[i]` for each position `i`
-in a cycle of `P = season_length / interval` ticks. For a daily cycle at 10s,
-`P = 8640`.
+in a cycle of `P = season_length / interval` slots. For a daily cycle at 10s,
+`P = 8640`. Slots are aligned to the wall clock, not to a tick counter:
 
 ```
-i  = t mod P
+i  = (unix_time mod season_length) / interval
 ℓₜ = α·(xₜ − s[i]) + (1 − α)·(ℓₜ₋₁ + bₜ₋₁)
 bₜ = β·(ℓₜ − ℓₜ₋₁) + (1 − β)·bₜ₋₁
 s[i] ← γ·(xₜ − ℓₜ) + (1 − γ)·s[i]
@@ -113,8 +113,12 @@ peak.
 Holt's forecast. At the end of the first cycle it initializes:
 
 ```
-ℓ = mean(first cycle),  b = 0,  s[i] = xᵢ − ℓ
+ℓ = mean(first cycle),  b = 0,  s[i] = xᵢ − ℓ   (slots never seen start at 0)
 ```
+
+Because slots follow the wall clock, a gap in samples (dockscale down, a
+skipped tick) doesn't shift the season. The next sample at 14:15 updates the
+14:15 slot, whatever happened before.
 
 | Setting | Default | Effect |
 |---|---|---|
@@ -123,9 +127,9 @@ Holt's forecast. At the end of the first cycle it initializes:
 
 **Limitations:**
 
-- **State is lost on restart.** After every restart, it spends a full season
-  (a day, for `24h`) working as plain Holt. Persisting model state is on the
-  roadmap.
+- **Without `memory.dir`, state is lost on restart**, and the next start spends
+  a full season (a day, for `24h`) relearning. With `memory.dir`, the seasonal
+  offsets are restored even from an old snapshot (see [memory.md](memory.md)).
 - **Memory:** one float64 per position, which is 8640 × 8 B ≈ 69 KB per metric
   for a daily season. A weekly season at 10s is about 480 KB per metric.
 - **Additive seasonality** assumes the daily swing is roughly the same size
@@ -136,7 +140,7 @@ Holt's forecast. At the end of the first cycle it initializes:
 
 ```mermaid
 flowchart TD
-    q1{Clear daily or weekly<br/>pattern in load?} -->|yes| q2{Can tolerate a<br/>full-season warm-up<br/>after each restart?}
+    q1{Clear daily or weekly<br/>pattern in load?} -->|yes| q2{memory.dir set, or<br/>can tolerate a full-season<br/>warm-up after a restart?}
     q2 -->|yes| hw[holt_winters]
     q2 -->|no| holt[holt]
     q1 -->|no| q3{Load ramps up<br/>gradually rather<br/>than in jumps?}

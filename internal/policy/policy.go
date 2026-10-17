@@ -34,16 +34,34 @@ type Decision struct {
 	Reason      string
 }
 
-type rec struct {
-	at time.Time
-	n  int
+// Rec is one past recommendation, kept for the scale-down stabilization window.
+type Rec struct {
+	At time.Time `json:"at"`
+	N  int       `json:"n"`
 }
 
 type Policy struct {
 	cfg      Config
 	lastUp   time.Time
 	lastDown time.Time
-	history  []rec
+	history  []Rec
+}
+
+// State is the policy's memory: when it last scaled, and its recent
+// recommendations. Persisting it keeps cooldowns and stabilization intact
+// across restarts.
+type State struct {
+	LastUp   time.Time `json:"last_up"`
+	LastDown time.Time `json:"last_down"`
+	History  []Rec     `json:"history,omitempty"`
+}
+
+func (p *Policy) State() State {
+	return State{LastUp: p.lastUp, LastDown: p.lastDown, History: append([]Rec(nil), p.history...)}
+}
+
+func (p *Policy) Restore(s State) {
+	p.lastUp, p.lastDown, p.history = s.LastUp, s.LastDown, append([]Rec(nil), s.History...)
 }
 
 func New(cfg Config) *Policy { return &Policy{cfg: cfg} }
@@ -141,10 +159,10 @@ func (p *Policy) recommend(current int, signals []Signal) (int, string) {
 }
 
 func (p *Policy) remember(now time.Time, n int) {
-	p.history = append(p.history, rec{at: now, n: n})
+	p.history = append(p.history, Rec{At: now, N: n})
 	cutoff := now.Add(-p.cfg.DownStabilization)
 	i := 0
-	for i < len(p.history)-1 && p.history[i].at.Before(cutoff) {
+	for i < len(p.history)-1 && p.history[i].At.Before(cutoff) {
 		i++
 	}
 	p.history = p.history[i:]
@@ -153,8 +171,8 @@ func (p *Policy) remember(now time.Time, n int) {
 func (p *Policy) stabilized() int {
 	m := 0
 	for _, r := range p.history {
-		if r.n > m {
-			m = r.n
+		if r.N > m {
+			m = r.N
 		}
 	}
 	return m

@@ -6,12 +6,18 @@ import (
 
 	"dockscale/internal/config"
 	"dockscale/internal/engine"
+	"dockscale/internal/memory"
 	"dockscale/internal/policy"
 )
 
 type Options struct {
-	Start        int           // initial replicas; 0 means the service's min
-	StartupDelay time.Duration // time before a new replica takes load
+	Start         int           // initial replicas; 0 means the service's min
+	StartupDelay  time.Duration // time before a new replica takes load
+	EvaluateAfter time.Duration // outcome window for grading decisions; default 10m
+
+	// Journal, if set, receives every decision and outcome, as the live
+	// controller would journal them.
+	Journal func(memory.Record)
 }
 
 // Tick is one simulated control-loop iteration.
@@ -35,18 +41,25 @@ type Summary struct {
 	OverloadTime    time.Duration
 	RecordedHours   float64 // replica-hours actually run, if the recording has replica counts
 	MedianStep      time.Duration
-	IntervalWarning bool // recording spacing differs from the configured interval
+	IntervalWarning bool            // recording spacing differs from the configured interval
+	Verdicts        map[string]int  // graded decision outcomes, as the live journal would record
+	Final           engine.Snapshot // everything the engine learned by the end
 }
 
 // Simulate replays recorded load through a fresh engine. Scale actions take
 // effect immediately for the count the policy sees, but new replicas only
 // share load after StartupDelay.
 func Simulate(sc config.Service, interval time.Duration, rows []Row, opt Options) ([]Tick, Summary) {
-	var sum Summary
+	sum := Summary{Verdicts: map[string]int{}}
 	if len(rows) == 0 {
 		return nil, sum
 	}
-	eng := engine.New(sc)
+	eng := engine.New(sc, interval)
+	window := opt.EvaluateAfter
+	if window <= 0 {
+		window = 10 * time.Minute
+	}
+	eval := &memory.Evaluator{Window: window, Tolerance: sc.Behavior.Tolerance}
 	current := opt.Start
 	if current <= 0 {
 		current = sc.Min
@@ -63,6 +76,12 @@ func Simulate(sc config.Service, interval time.Duration, rows []Row, opt Options
 		perReplica := engine.PerReplica(row.Totals, max(ready, 1))
 
 		signals, d := eng.Step(now, current, perReplica)
+		for _, o := range eval.Observe(now, signals) {
+			sum.Verdicts[o.Verdict]++
+			if opt.Journal != nil {
+				opt.Journal(memory.Record{Type: "outcome", Outcome: &o})
+			}
+		}
 		t := Tick{At: now, Replicas: current, Ready: ready, Desired: d.Desired, Signals: signals, Reason: d.Reason}
 		for _, m := range sc.Metrics {
 			if v, ok := perReplica[m.Type]; ok && v > m.Target*(1+sc.Behavior.Tolerance) {
@@ -98,10 +117,17 @@ func Simulate(sc config.Service, interval time.Duration, rows []Row, opt Options
 		}
 		if d.Desired != current {
 			eng.Commit(now, current, d.Desired)
+			dec := memory.Decision{ID: memory.NewID(sc.Name, now), At: now, Service: sc.Name, From: current, To: d.Desired,
+				Wanted: d.Desired, Recommended: d.Recommended, Reason: d.Reason, Signals: signals}
+			eval.Track(dec)
+			if opt.Journal != nil {
+				opt.Journal(memory.Record{Type: "decision", Decision: &dec})
+			}
 			current = d.Desired
 		}
 	}
 
+	sum.Final = eng.Snapshot(rows[len(rows)-1].At)
 	sum.Ticks = len(rows)
 	sum.Duration = rows[len(rows)-1].At.Sub(rows[0].At)
 	sum.MedianStep = medianStep(rows)

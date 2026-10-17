@@ -27,6 +27,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./examples/dockscale.yaml:/etc/dockscale/dockscale.yaml:ro
+      - dockscale-memory:/var/lib/dockscale   # learned state + decision journal
     ports:
       - "9090:9090"
     networks: [dockscale_net]
@@ -35,3 +36,6 @@ services:
 networks:
   dockscale_net:
     name: dockscale_net
+
+volumes:
+  dockscale-memory:

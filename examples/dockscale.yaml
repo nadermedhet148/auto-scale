@@ -2,6 +2,13 @@ interval: 10s      # control loop period
 listen: ":9090"    # /status, /metrics, /healthz
 dry_run: false
 
+# What dockscale remembers across restarts. Remove `dir` to keep everything in memory only.
+memory:
+  dir: /var/lib/dockscale     # journal.jsonl + state-<service>.json
+  snapshot_every: 1m          # how often learned state is saved (also saved on shutdown)
+  max_state_age: 15m          # older snapshots restore only long-term memory
+  evaluate_after: 10m         # watch each decision this long, then grade it
+
 services:
   - name: web
     min: 2
@@ -48,3 +55,13 @@ services:
       horizon: 3          # forecast this many intervals ahead (holt only)
       outlier_k: 3.5      # clamp samples beyond k·MAD from the rolling median; -1 disables
       outlier_window: 6
+
+    # Learned load profile. With prewarm, a recurring peak is met with capacity
+    # before live metrics show it.
+    history:
+      prewarm: false
+      cycle: 24h          # 168h for weekly patterns (needs 2+ weeks to learn)
+      slot: 15m
+      lead: 5m            # also look this far ahead
+      sigma: 1            # headroom in standard deviations
+      min_samples: 2      # visits before a slot is trusted

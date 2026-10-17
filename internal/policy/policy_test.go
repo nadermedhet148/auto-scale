@@ -90,3 +90,15 @@ func TestHighestSignalWins(t *testing.T) {
 		t.Fatalf("got %d, want 4", d.Desired)
 	}
 }
+
+func TestStateRoundTripKeepsCooldown(t *testing.T) {
+	p := New(testConfig())
+	d := p.Decide(t0, 2, cpu(90))
+	p.Commit(t0, 2, d.Desired)
+
+	q := New(testConfig())
+	q.Restore(p.State())
+	if d := q.Decide(t0.Add(10*time.Second), 3, cpu(90)); d.Desired != 3 {
+		t.Fatalf("restored policy ignored the scale-up cooldown: %d", d.Desired)
+	}
+}

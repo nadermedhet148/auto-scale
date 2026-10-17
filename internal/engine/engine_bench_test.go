@@ -18,7 +18,7 @@ func BenchmarkStep(b *testing.B) {
 		Behavior: config.Behavior{Tolerance: 0.1, ScaleDownStabilization: 5 * time.Minute, MaxStepUp: 4, MaxStepDown: 1},
 		Model:    config.Model{Kind: config.ModelHolt, Alpha: 0.5, Beta: 0.3, Horizon: 3, OutlierK: 3.5, OutlierWindow: 6},
 	}
-	e := New(sc)
+	e := New(sc, 10*time.Second)
 	per := map[string]float64{config.MetricCPU: 55, config.MetricRPS: 48, config.MetricLatencyP95: 150}
 	now := time.Unix(0, 0)
 	b.ReportAllocs()

@@ -15,6 +15,7 @@ import (
 	"dockscale/internal/config"
 	"dockscale/internal/controller"
 	"dockscale/internal/docker"
+	"dockscale/internal/memory"
 	"dockscale/internal/replay"
 )
 
@@ -65,7 +66,15 @@ func run(cfgPath string, dryRun bool, recordPath string, log *slog.Logger) error
 		defer rec.Close()
 	}
 
-	ctl, err := controller.New(cfg, dk, rec, log)
+	var mem *memory.Store
+	if cfg.Memory.Dir != "" {
+		if mem, err = memory.Open(cfg.Memory.Dir); err != nil {
+			return err
+		}
+		defer mem.Close()
+	}
+
+	ctl, err := controller.New(cfg, dk, rec, mem, log)
 	if err != nil {
 		return err
 	}
@@ -76,8 +85,9 @@ func run(cfgPath string, dryRun bool, recordPath string, log *slog.Logger) error
 		}
 	}()
 
-	log.Info("dockscale started", "services", len(cfg.Services), "interval", cfg.Interval, "listen", cfg.Listen, "dry_run", cfg.DryRun)
+	log.Info("dockscale started", "services", len(cfg.Services), "interval", cfg.Interval, "listen", cfg.Listen, "dry_run", cfg.DryRun, "memory", cfg.Memory.Dir)
 	ctl.Run(ctx)
+	ctl.Close() // save learned state before exiting
 
 	// Replicas are left running on shutdown; the next start adopts them by label.
 	log.Info("shutting down")

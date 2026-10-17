@@ -47,6 +47,8 @@ negotiated, and versions 1.40 through 1.56 are supported.
 | `-record` | (none) | Append each tick's load to this CSV for replay |
 | `-v` | false | Debug logging, including every hold decision |
 
+Memory is configured in the file (`memory.dir`), not with a flag.
+
 ### `dockscale-replay`
 
 | Flag | Default | Description |
@@ -57,8 +59,19 @@ negotiated, and versions 1.40 through 1.56 are supported.
 | `-start` | `min` | Initial replicas |
 | `-startup-delay` | 10s | Time before a new replica takes load |
 | `-timeline` | (none) | Write a per-tick CSV for the first config |
+| `-memory-dir` | (none) | Write the first config's journal and learned state here |
 
-`dockscale-replay generate` takes `-out -service -days -interval -base -peak -noise -spike-p -cpu-per-rps -seed`.
+`dockscale-replay generate` takes `-out -service -days -interval -shape (sine|step) -base -peak -noise -spike-p -cpu-per-rps -seed`.
+
+### `dockscale-memory`
+
+| Subcommand | Flags | Shows |
+|---|---|---|
+| `decisions` | `-dir -service -since -limit -json` | Past decisions with verdicts, in UTC |
+| `report` | `-dir -config -service -since -json` | Verdict counts and tuning advice per service |
+| `profile` | `-dir -service -metric` | The learned load profile, slot by slot |
+
+`-since` counts back from the newest journal entry.
 
 ## Configuration reference
 
@@ -69,6 +82,12 @@ ignored.
 interval: 10s          # control loop period                        default 10s
 listen: ":9090"        # HTTP address                                default :9090
 dry_run: false
+
+memory:                # see memory.md; disabled unless dir is set
+  dir: /var/lib/dockscale
+  snapshot_every: 1m   # save learned state this often              default 1m
+  max_state_age: 15m   # older snapshots restore long-term only     default 15m
+  evaluate_after: 10m  # grade each decision after this long        default 10m
 
 services:
   - name: web          # required, unique
@@ -116,6 +135,15 @@ services:
       horizon: 3
       outlier_k: 3.5           # -1 disables
       outlier_window: 6
+
+    history:                   # learned load profile, see memory.md
+      prewarm: false           # scale ahead of recurring peaks
+      cycle: 24h               # or 168h                         default 24h
+      slot: 15m                # >= interval, divides cycle      default 15m
+      lead: 5m                 #                                 default 5m
+      sigma: 1                 # headroom; negative means 0      default 1
+      min_samples: 2           #                                 default 2
+      decay: 0.25              # (0, 1]                          default 0.25
 ```
 
 Durations use Go syntax (`500ms`, `30s`, `2m`, `24h`). A field left at zero or
@@ -127,6 +155,7 @@ empty takes its default.
 |---|---|
 | `GET /healthz` | `ok`: the process is up |
 | `GET /status` | JSON array with one object per service |
+| `GET /history?service=&limit=` | Recent decisions with graded outcomes, newest first (default limit 50) |
 | `GET /metrics` | Prometheus text format |
 
 `/status` example:
@@ -191,6 +220,8 @@ level=ERROR msg=scale service=web reached=3 wanted=4 err="create web-1a2b3c: …
 
 ## Security
 
+- The memory directory holds decisions, signal values and load profiles.
+  It's operational data, not secrets, but it reveals traffic patterns.
 - **Access to the Docker socket is root on the host.** Anyone who can control
   dockscale's config, or compromise its process, can start privileged
   containers. Mount the config read-only and limit who can change it.
@@ -216,8 +247,8 @@ level=ERROR msg=scale service=web reached=3 wanted=4 err="create web-1a2b3c: …
 ## Known limitations
 
 - One Docker host only.
-- Model state (smoothing, Holt-Winters seasons) is in memory and lost on
-  restart.
+- Without `memory.dir`, model state is lost on restart. With it: one dockscale
+  per memory directory, and the journal isn't rotated automatically.
 - No scale to zero: `min` must be at least 1.
 - No credentials for private registries when pulling. Images must already be
   pullable anonymously or pre-pulled.

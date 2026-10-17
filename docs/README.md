@@ -7,8 +7,13 @@
 | [Metrics](metrics.md) | Where each signal comes from and how it is turned into a per-replica value |
 | [Statistical models](models.md) | The maths behind the outlier filter, EWMA, Holt and Holt-Winters, plus a tuning guide |
 | [Scaling policy](policy.md) | How a replica count is chosen: target tracking, tolerance, cooldowns, stabilization |
+| [Memory](memory.md) | What dockscale remembers (learned state, graded decisions, load profiles) and how it uses that for future decisions |
 | [Replay and tuning](replay.md) | Recording load, simulating policies offline and reading the results |
 | [Operations](operations.md) | Deploying, the full configuration reference, endpoints, failure modes and limits |
 
 New to the project? Read them in this order: architecture → control loop → policy.
 The rest are reference.
+
+Why things are the way they are: [decision records](decisions/README.md).
+What changed when: [CHANGELOG.md](../CHANGELOG.md). How to work in the repo:
+[CLAUDE.md](../CLAUDE.md).

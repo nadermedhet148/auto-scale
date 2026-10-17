@@ -41,7 +41,18 @@ type Config struct {
 	Interval time.Duration `yaml:"interval"`
 	Listen   string        `yaml:"listen"`
 	DryRun   bool          `yaml:"dry_run"`
+	Memory   Memory        `yaml:"memory"`
 	Services []Service     `yaml:"services"`
+}
+
+// Memory configures what dockscale remembers across restarts: learned model
+// state, a journal of decisions and their outcomes, and load profiles.
+// Everything is disabled unless Dir is set.
+type Memory struct {
+	Dir           string        `yaml:"dir"`
+	SnapshotEvery time.Duration `yaml:"snapshot_every"` // how often learned state is saved
+	MaxStateAge   time.Duration `yaml:"max_state_age"`  // older snapshots restore only seasonal state
+	EvaluateAfter time.Duration `yaml:"evaluate_after"` // how long to watch a decision before grading it
 }
 
 type Service struct {
@@ -54,6 +65,20 @@ type Service struct {
 	Queue      *Queue      `yaml:"queue"`
 	Behavior   Behavior    `yaml:"behavior"`
 	Model      Model       `yaml:"model"`
+	History    History     `yaml:"history"`
+}
+
+// History configures the learned load profile: typical load per time slot of
+// a repeating cycle. With Prewarm on, the profile adds a signal that asks for
+// the capacity this slot usually needs, so recurring peaks are met early.
+type History struct {
+	Prewarm    bool          `yaml:"prewarm"`
+	Cycle      time.Duration `yaml:"cycle"`       // 24h (daily) or 168h (weekly)
+	Slot       time.Duration `yaml:"slot"`        // profile resolution
+	Lead       time.Duration `yaml:"lead"`        // also look this far ahead
+	Sigma      float64       `yaml:"sigma"`       // headroom: expected = mean + sigma·stddev; negative means 0
+	MinSamples int           `yaml:"min_samples"` // visits to a slot before it is trusted
+	Decay      float64       `yaml:"decay"`       // weight of the newest visit once a slot has history
 }
 
 // Template describes how to create one replica.
@@ -136,6 +161,15 @@ func (c *Config) applyDefaults() {
 	if c.Listen == "" {
 		c.Listen = ":9090"
 	}
+	if c.Memory.SnapshotEvery == 0 {
+		c.Memory.SnapshotEvery = time.Minute
+	}
+	if c.Memory.MaxStateAge == 0 {
+		c.Memory.MaxStateAge = 15 * time.Minute
+	}
+	if c.Memory.EvaluateAfter == 0 {
+		c.Memory.EvaluateAfter = 10 * time.Minute
+	}
 	for i := range c.Services {
 		s := &c.Services[i]
 		if s.Min == 0 {
@@ -181,6 +215,27 @@ func (c *Config) applyDefaults() {
 		if m.Gamma == 0 {
 			m.Gamma = 0.1
 		}
+		h := &s.History
+		if h.Cycle == 0 {
+			h.Cycle = 24 * time.Hour
+		}
+		if h.Slot == 0 {
+			h.Slot = 15 * time.Minute
+		}
+		if h.Lead == 0 {
+			h.Lead = 5 * time.Minute
+		}
+		if h.Sigma == 0 {
+			h.Sigma = 1
+		} else if h.Sigma < 0 {
+			h.Sigma = 0
+		}
+		if h.MinSamples == 0 {
+			h.MinSamples = 2
+		}
+		if h.Decay == 0 {
+			h.Decay = 0.25
+		}
 		if s.Queue != nil && s.Queue.VHost == "" {
 			s.Queue.VHost = "/"
 		}
@@ -211,6 +266,12 @@ func (c *Config) validate() error {
 		}
 		if err := s.validate(); err != nil {
 			return fmt.Errorf("service %q: %w", s.Name, err)
+		}
+		if h := s.History; h.Slot < c.Interval || h.Cycle%h.Slot != 0 {
+			return fmt.Errorf("service %q: history.slot must be >= interval and divide history.cycle evenly", s.Name)
+		}
+		if s.History.Decay <= 0 || s.History.Decay > 1 {
+			return fmt.Errorf("service %q: history.decay must be in (0, 1]", s.Name)
 		}
 		if seen[s.Name] {
 			return fmt.Errorf("service %q: duplicate name", s.Name)

@@ -2,8 +2,8 @@
 
 > Full documentation: **[docs/](docs/README.md)**: [architecture](docs/architecture.md),
 > [control loop](docs/control-loop.md), [metrics](docs/metrics.md),
-> [models](docs/models.md), [policy](docs/policy.md), [replay](docs/replay.md),
-> [operations](docs/operations.md).
+> [models](docs/models.md), [policy](docs/policy.md), [memory](docs/memory.md),
+> [replay](docs/replay.md), [operations](docs/operations.md).
 
 A horizontal autoscaler for plain Docker on one host. It watches a service's
 replicas, estimates load with simple statistical models, and starts or stops
@@ -79,6 +79,27 @@ To tear down, remove the stack and then the replicas, which compose doesn't own:
 ```sh
 docker compose down
 docker rm -f $(docker ps -aq --filter label=dockscale.managed=true)
+```
+
+## Memory
+
+With `memory.dir` set, dockscale remembers what happened and uses it later
+(details in [docs/memory.md](docs/memory.md)):
+
+- **Learned state survives restarts.** Smoothing, Holt-Winters seasons and
+  cooldowns are snapshotted and restored, so a restart no longer means a day
+  of relearning.
+- **Every decision is journalled and graded** after 10 minutes as
+  `effective`, `insufficient` or `unnecessary` (scale-ups), or `ok` or
+  `premature` (scale-downs).
+- **A load profile per time slot** ("every day at 09:00, rps is usually 400")
+  drives `history.prewarm`, which scales out *before* recurring peaks. On a
+  business-hours trace, it removed the 09:00 overload entirely once it had
+  learned two days.
+
+```sh
+curl localhost:9090/history?service=web
+dockscale-memory report -dir /var/lib/dockscale -config dockscale.yaml
 ```
 
 ## Tune offline with replay
@@ -187,7 +208,7 @@ management API's `messages` count, which is ready plus unacked.
 
 ## Roadmap
 
-- Persist model state across restarts. Holt-Winters currently relearns a full season after every restart.
+- Journal rotation, and automatic (opt-in) application of report advice
 - Redis streams / consumer-group lag as a queue source
 - Scale to zero, with activation on first request
 - Docker Swarm / multi-host backend behind the same engine

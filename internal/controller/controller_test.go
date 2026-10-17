@@ -18,6 +18,7 @@ import (
 
 	"dockscale/internal/config"
 	"dockscale/internal/docker"
+	"dockscale/internal/memory"
 	"dockscale/internal/replay"
 )
 
@@ -123,7 +124,7 @@ type harness struct {
 func newHarness(t *testing.T, sc config.Service, dk *fakeDocker, dryRun bool, rec *replay.Recorder) *harness {
 	t.Helper()
 	cfg := &config.Config{Interval: 10 * time.Second, DryRun: dryRun, Services: []config.Service{sc}}
-	c, err := New(cfg, dk, rec, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	c, err := New(cfg, dk, rec, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,4 +303,70 @@ func TestHTTPEndpoints(t *testing.T) {
 			t.Errorf("/metrics missing %q:\n%s", want, body)
 		}
 	}
+}
+
+func TestMemoryJournalsGradesAndSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	sc := worker()
+	sc.Behavior.ScaleUpCooldown = 5 * time.Minute
+	open := func() (*memory.Store, *harness, *fakeDocker) {
+		st, err := memory.Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dk := (&fakeDocker{}).withLive(1)
+		cfg := &config.Config{Interval: 10 * time.Second, Services: []config.Service{sc},
+			Memory: config.Memory{Dir: dir, SnapshotEvery: time.Minute, MaxStateAge: 15 * time.Minute, EvaluateAfter: time.Minute}}
+		c, err := New(cfg, dk, nil, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		h := &harness{c: c, dk: dk, q: &fakeQueue{}, clock: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+		c.now = func() time.Time { return h.clock }
+		c.svcs[0].queue = h.q
+		return st, h, dk
+	}
+
+	st, h, _ := open()
+	h.q.depth = 300 // 1 replica, needs 3
+	h.tick(0)
+	h.q.depth = 250 // ~83 per replica afterwards: within target
+	for range 7 {
+		h.tick(10 * time.Second)
+	}
+	hist := h.c.History("worker", 10)
+	if len(hist) != 1 || hist[0].Decision.From != 1 || hist[0].Decision.To != 3 {
+		t.Fatalf("history = %+v", hist)
+	}
+	if hist[0].Outcome == nil || hist[0].Outcome.Verdict != memory.VerdictEffective {
+		t.Fatalf("outcome = %+v, want effective", hist[0].Outcome)
+	}
+	h.c.Close()
+	st.Close()
+
+	// Restart: history comes back from the journal, and the restored scale-up
+	// cooldown blocks an immediate scale-up the new process would otherwise make.
+	st2, h2, dk2 := open()
+	defer st2.Close()
+	h2.clock = h.clock.Add(5 * time.Second)
+	if got := h2.c.History("", 10); len(got) != 1 || got[0].Outcome == nil {
+		t.Fatalf("history after restart = %+v", got)
+	}
+	h2.q.depth = 500
+	h2.tick(0)
+	if dk2.starts != 0 {
+		t.Fatalf("restored cooldown ignored: %d starts", dk2.starts)
+	}
+
+	srv := httptest.NewServer(h2.c.Handler())
+	defer srv.Close()
+	resp, err := srv.Client().Get(srv.URL + "/history?service=worker&limit=5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []memory.Entry
+	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil || len(entries) != 1 {
+		t.Fatalf("/history = %+v, %v", entries, err)
+	}
+	resp.Body.Close()
 }

@@ -22,7 +22,7 @@ func BenchmarkSimulate(b *testing.B) {
 		b.Run(kind, func(b *testing.B) {
 			sc := service()
 			sc.Metrics = append(sc.Metrics, config.Metric{Type: config.MetricCPU, Target: 60})
-			sc.Model = config.Model{Kind: kind, Alpha: 0.5, Beta: 0.3, Gamma: 0.2, Period: 8640, Horizon: 3, OutlierK: 3.5, OutlierWindow: 6}
+			sc.Model = config.Model{Kind: kind, Alpha: 0.5, Beta: 0.3, Gamma: 0.2, SeasonLength: 24 * time.Hour, Horizon: 3, OutlierK: 3.5, OutlierWindow: 6}
 			b.ReportAllocs()
 			for b.Loop() {
 				Simulate(sc, 10*time.Second, rows, Options{StartupDelay: 10 * time.Second})

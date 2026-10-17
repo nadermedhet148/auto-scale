@@ -54,7 +54,10 @@ When no recording is available yet:
 dockscale-replay generate -out load.csv -days 3 -base 20 -peak 400 -interval 10s
 ```
 
-This produces a daily sine wave with the trough at 03:00 and the peak at 15:00,
+`-shape sine` (the default) produces a smooth daily wave with the trough at
+03:00 and the peak at 15:00. `-shape step` produces business hours instead:
+`-base` until 09:00, an abrupt jump to `-peak`, and back at 17:00. That's the
+pattern `history.prewarm` is designed for. Both add
 Gaussian noise (`-noise`, default 8%), and random 2.5× spikes lasting 3 ticks
 (`-spike-p`, default 0.2% per tick). CPU is modelled as proportional to rps
 (`-cpu-per-rps`).
@@ -108,6 +111,8 @@ recording itself ran 401.3 replica-hours     ← only for real recordings
 | `peak` | Maximum replicas | a smaller worst case |
 | `replica-h` | Sum of replicas × time: **cost** | cheaper |
 | `overload` | Time when load per *ready* replica exceeded `target × (1 + tolerance)`: **risk** | safer |
+| `prewarm` | Whether `history.prewarm` is on for this config | |
+| `ups eff/insuf/unnec`, `downs ok/prem` | Decisions graded exactly as the live journal grades them (see [memory.md](memory.md)) | fewer insufficient, unnecessary and premature |
 
 Tuning means trading `replica-h` against `overload`. The recording's own
 replica-hours (shown when the CSV has a `replicas` column) is the baseline to
@@ -118,6 +123,18 @@ particular moment:
 
 ```
 timestamp,replicas,ready,desired,overload,rps_raw,rps_estimate,rps_target,…,reason
+```
+
+## Writing memory from a replay
+
+`-memory-dir DIR` makes the first config write the journal (decisions and
+graded outcomes) and its final learned state to `DIR`, in the same format a
+live dockscale writes. You can then inspect it with `dockscale-memory`, or use
+it to seed a live instance:
+
+```sh
+dockscale-replay -in load.csv -config examples/policies/holt_prewarm.yaml -memory-dir ./mem
+dockscale-memory report -dir ./mem -config examples/policies/holt_prewarm.yaml
 ```
 
 ## A tuning workflow
