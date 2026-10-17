@@ -153,6 +153,8 @@ empty takes its default.
 
 | Endpoint | Content |
 |---|---|
+| `GET /` | Redirects to the web UI at `/ui/` (see [ui.md](ui.md)) |
+| `GET /api/overview`, `/api/series`, `/api/report`, `/api/profile`, `/api/history` | JSON for the UI (see [ui.md](ui.md#api-used-by-the-ui)) |
 | `GET /healthz` | `ok`: the process is up |
 | `GET /status` | JSON array with one object per service |
 | `GET /history?service=&limit=` | Recent decisions with graded outcomes, newest first (default limit 50) |
@@ -230,8 +232,9 @@ level=ERROR msg=scale service=web reached=3 wanted=4 err="create web-1a2b3c: …
   dockscale count or remove it.
 - Queue and Traefik credentials are in the config URLs, so treat the config
   file as a secret.
-- `/status` and `/metrics` have no authentication. Don't publish port 9090
-  outside a trusted network.
+- The web UI, `/api/*`, `/status` and `/metrics` have no authentication. They're
+  read-only, and URLs and env are never published, but they do reveal traffic
+  and scaling behaviour. Don't publish port 9090 outside a trusted network.
 
 ## Troubleshooting
 

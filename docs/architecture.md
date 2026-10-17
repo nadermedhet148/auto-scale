@@ -51,6 +51,7 @@ cmd/
   dockscale/          main: flags, wiring, HTTP server, signal handling
   dockscale-replay/   offline simulator CLI (generate + compare)
   dockscale-memory/   inspect memory: decisions, report, profile
+  dockscale-demo/     real controller + UI against a fake Docker, for trying the UI
 internal/
   config/      YAML loading, defaults, validation
   controller/  the control loop and HTTP endpoints
@@ -58,6 +59,7 @@ internal/
   model/       statistical estimators (outlier filter, EWMA, Holt, Holt-Winters)
   policy/      target tracking, tolerance, cooldowns, stabilization (no I/O)
   memory/      load profile, decision grading, report (no I/O) + file store
+  ui/          embedded web dashboard (static HTML/CSS/JS, go:embed)
   docker/      Docker Engine API wrapper: replicas, start, remove, usage
   metrics/     Prometheus text parser, histogram quantile, Traefik scraper
   queue/       queue backlog sources: Redis list, RabbitMQ
@@ -83,6 +85,7 @@ flowchart TD
     controller --> queue
     controller --> replay
     controller --> memory
+    controller --> ui
 
     replay --> engine
     replay --> memory
@@ -184,6 +187,7 @@ the decision journal persist (see [memory.md](memory.md)).
 | Decisions and their graded outcomes | `memory.Evaluator`, `journal.jsonl` | Append-only journal; the last 200 per service are kept in memory for `/history` |
 | Previous Traefik counter values | `metrics.Traefik` | Process lifetime |
 | Last status per service | `Controller` (behind a RWMutex) | Overwritten every tick |
+| Recent ticks (replicas, signals) for charts | `Controller` | Ring of 1,080 per service (3h at 10s), in memory only |
 
 The source of truth for "how many replicas exist" is always Docker. dockscale
 re-reads it on every tick and never trusts its own count. So when it restarts,
@@ -228,4 +232,5 @@ flowchart LR
 | Minimal dependencies | Hand-written Prometheus parser and Redis RESP client, no metrics or Redis SDK | More code of our own to maintain |
 | Scale down newest first | Old replicas are warm and hold long-lived connections | Uneven container ages over time |
 | Memory as plain files (JSONL + JSON), no database | Zero dependencies, easy to read with `jq`, atomic state writes | One writer per directory, manual journal rotation |
+| Embedded vanilla-JS UI, read-only | No toolchain or dependencies; no remote-control surface on an unauthenticated port | Chart code of our own; 3h of chart history |
 | Seasonal slots aligned to the wall clock | Seasons and profiles stay valid across gaps and restarts | Slots are in UTC, so daylight-saving shifts take a few days to heal |

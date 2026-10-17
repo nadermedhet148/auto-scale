@@ -3,7 +3,7 @@
 > Full documentation: **[docs/](docs/README.md)**: [architecture](docs/architecture.md),
 > [control loop](docs/control-loop.md), [metrics](docs/metrics.md),
 > [models](docs/models.md), [policy](docs/policy.md), [memory](docs/memory.md),
-> [replay](docs/replay.md), [operations](docs/operations.md).
+> [web UI](docs/ui.md), [replay](docs/replay.md), [operations](docs/operations.md).
 
 A horizontal autoscaler for plain Docker on one host. It watches a service's
 replicas, estimates load with simple statistical models, and starts or stops
@@ -80,6 +80,17 @@ To tear down, remove the stack and then the replicas, which compose doesn't own:
 docker compose down
 docker rm -f $(docker ps -aq --filter label=dockscale.managed=true)
 ```
+
+## Web UI
+
+dockscale serves a read-only dashboard at `http://<host>:9090/`. It shows
+replicas over time, every signal against its target, graded decisions with
+tuning advice, and the learned load profile. It's compiled into the binary,
+with no build step and no external dependencies ([docs/ui.md](docs/ui.md)).
+
+![dockscale dashboard](docs/img/dashboard-overview.jpg)
+
+Try it without Docker: `go run ./cmd/dockscale-demo`, then open http://localhost:9090.
 
 ## Memory
 

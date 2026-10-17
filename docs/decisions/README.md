@@ -19,6 +19,7 @@ memory of *why* it is the way it is.
 | [0011](0011-wall-clock-aligned-seasonality.md) | Seasonality aligned to the wall clock | Accepted |
 | [0012](0012-grade-decisions-by-outcome.md) | Grade every decision by its outcome | Accepted |
 | [0013](0013-prewarm-as-a-policy-signal.md) | History prewarm as an ordinary policy signal | Accepted |
+| [0014](0014-embedded-read-only-ui.md) | An embedded, dependency-free, read-only web UI | Accepted |
 
 ## Adding a record
 

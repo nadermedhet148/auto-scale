@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -369,4 +370,95 @@ func TestMemoryJournalsGradesAndSurvivesRestart(t *testing.T) {
 		t.Fatalf("/history = %+v, %v", entries, err)
 	}
 	resp.Body.Close()
+}
+
+func getJSON(t *testing.T, srv *httptest.Server, path string, v any) int {
+	t.Helper()
+	resp, err := srv.Client().Get(srv.URL + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if v != nil && resp.StatusCode == 200 {
+		if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+	}
+	return resp.StatusCode
+}
+
+func TestUIAndAPI(t *testing.T) {
+	sc := worker()
+	sc.Queue.URL = "redis://:hunter2@redis:6379/0" // must never be published
+	sc.History = config.History{Cycle: 24 * time.Hour, Slot: 15 * time.Minute, Decay: 0.25, MinSamples: 2}
+	h := newHarness(t, sc, (&fakeDocker{}).withLive(1), false, nil)
+	h.q.depth = 250
+	for range 100 { // 1000s: crosses a 15m profile slot boundary
+		h.tick(10 * time.Second)
+	}
+	srv := httptest.NewServer(h.c.Handler())
+	defer srv.Close()
+	noRedirect := *srv.Client()
+	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	resp, err := noRedirect.Get(srv.URL + "/")
+	if err != nil || resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/ui/" {
+		t.Fatalf("GET / = %v %v, want redirect to /ui/", resp.StatusCode, err)
+	}
+	for _, path := range []string{"/ui/", "/ui/app.js", "/ui/style.css"} {
+		resp, err := srv.Client().Get(srv.URL + path)
+		if err != nil || resp.StatusCode != 200 {
+			t.Fatalf("GET %s = %v %v", path, resp.StatusCode, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if len(body) < 100 {
+			t.Fatalf("%s looks empty (%d bytes)", path, len(body))
+		}
+	}
+
+	resp, err = srv.Client().Get(srv.URL + "/api/overview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if strings.Contains(string(raw), "hunter2") || strings.Contains(string(raw), "redis://") {
+		t.Fatal("/api/overview leaked the queue URL")
+	}
+	var ov Overview
+	if err := json.Unmarshal(raw, &ov); err != nil || len(ov.Services) != 1 {
+		t.Fatalf("overview = %+v, %v", ov, err)
+	}
+	if !strings.Contains(string(raw), `"type":"queue_depth"`) || ov.Services[0].Status.Replicas != 3 {
+		t.Fatalf("overview JSON shape unexpected: %s", raw)
+	}
+
+	var pts []Point
+	if code := getJSON(t, srv, "/api/series?service=worker&window=5m", &pts); code != 200 || len(pts) != 31 {
+		t.Fatalf("series 5m = %d points (status %d), want 31", len(pts), code)
+	}
+	if code := getJSON(t, srv, "/api/series?service=nope", nil); code != 404 {
+		t.Fatalf("unknown service status = %d, want 404", code)
+	}
+	var rep map[string]any
+	if code := getJSON(t, srv, "/api/report?service=worker", &rep); code != 200 || rep["ups"] == nil {
+		t.Fatalf("report = %v (status %d)", rep, code)
+	}
+	var prof profileJSON
+	if code := getJSON(t, srv, "/api/profile?service=worker", &prof); code != 200 || len(prof.Metrics["queue_depth"]) != 96 {
+		t.Fatalf("profile = %+v (status %d), want 96 queue_depth slots", prof, code)
+	}
+}
+
+func TestSeriesIsCapped(t *testing.T) {
+	h := newHarness(t, worker(), (&fakeDocker{}).withLive(1), false, nil)
+	h.q.depth = 100
+	for range seriesLimit + 50 {
+		h.tick(10 * time.Second)
+	}
+	pts, _ := h.c.Series("worker", time.Time{})
+	if len(pts) != seriesLimit || !pts[len(pts)-1].At.Equal(h.clock) {
+		t.Fatalf("series has %d points ending %v, want %d ending %v", len(pts), pts[len(pts)-1].At, seriesLimit, h.clock)
+	}
 }

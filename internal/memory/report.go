@@ -40,14 +40,15 @@ func Join(records []Record, service string, since time.Time) []Entry {
 
 // Report summarizes how well past decisions worked.
 type Report struct {
-	Service    string         `json:"service"`
-	Since      time.Time      `json:"since"`
-	Decisions  int            `json:"decisions"`
-	Ups, Downs int            `json:"-"`
-	Failed     int            `json:"failed"` // decisions with an error
-	Verdicts   map[string]int `json:"verdicts"`
-	PerHour    float64        `json:"scale_events_per_hour"`
-	Advice     []string       `json:"advice"`
+	Service   string         `json:"service"`
+	Since     time.Time      `json:"since"`
+	Decisions int            `json:"decisions"`
+	Ups       int            `json:"ups"`
+	Downs     int            `json:"downs"`
+	Failed    int            `json:"failed"` // decisions with an error
+	Verdicts  map[string]int `json:"verdicts"`
+	PerHour   float64        `json:"scale_events_per_hour"`
+	Advice    []string       `json:"advice"`
 }
 
 // Analyze turns a service's history into a report with tuning advice for

@@ -27,6 +27,9 @@ const applyTimeout = 3 * time.Minute
 // recentLimit is how many decisions per service /history keeps in memory.
 const recentLimit = 200
 
+// seriesLimit is how many ticks per service the UI can chart (3h at 10s).
+const seriesLimit = 1080
+
 // Docker is the subset of the Docker client the controller needs.
 type Docker interface {
 	Replicas(ctx context.Context, service string) (live, dead []docker.Replica, err error)
@@ -44,7 +47,9 @@ type Controller struct {
 	mem  *memory.Store    // nil unless memory.dir is set
 	svcs []*service
 
-	mu sync.RWMutex // guards service.status and service.recent
+	banner string // shown in the UI, e.g. "demo"
+
+	mu sync.RWMutex // guards service.status, recent, series and profile
 }
 
 type service struct {
@@ -56,6 +61,16 @@ type service struct {
 	status  Status
 	recent  []memory.Entry // newest last
 	saved   time.Time      // last snapshot
+	series  []Point        // recent ticks for the UI, oldest first
+	profile *memory.ProfileState
+}
+
+// Point is one tick of one service, as charted by the UI.
+type Point struct {
+	At       time.Time       `json:"at"`
+	Replicas int             `json:"replicas"`
+	Desired  int             `json:"desired"`
+	Signals  []policy.Signal `json:"signals,omitempty"`
 }
 
 // Status is the last observed state of a service, served on /status.
@@ -145,6 +160,17 @@ func (c *Controller) snapshot(s *service, now time.Time) {
 	s.saved = now
 }
 
+// SetClock replaces the controller's clock. It's for simulations and
+// tests; call it before the first tick.
+func (c *Controller) SetClock(now func() time.Time) { c.now = now }
+
+// SetBanner sets a label the UI shows next to the title, e.g. "demo".
+func (c *Controller) SetBanner(s string) { c.banner = s }
+
+// Tick runs one control-loop iteration for every service. Run calls it on
+// the interval; simulations call it directly.
+func (c *Controller) Tick(ctx context.Context) { c.tickAll(ctx) }
+
 func (c *Controller) Run(ctx context.Context) {
 	c.tickAll(ctx)
 	t := time.NewTicker(c.cfg.Interval)
@@ -178,10 +204,24 @@ func (c *Controller) tick(ctx context.Context, s *service) {
 	c.mu.RLock()
 	st := Status{Service: s.cfg.Name, UpdatedAt: now, LastScale: s.status.LastScale}
 	c.mu.RUnlock()
+	observed := false
 	defer func() {
+		// This goroutine owns the engine, so copying its profile here is safe.
+		var prof *memory.ProfileState
+		if p := s.engine.Profile(); p != nil {
+			ps := p.State()
+			prof = &ps
+		}
 		c.mu.Lock()
+		defer c.mu.Unlock()
 		s.status = st
-		c.mu.Unlock()
+		s.profile = prof
+		if observed {
+			s.series = append(s.series, Point{At: st.UpdatedAt, Replicas: st.Replicas, Desired: st.Desired, Signals: st.Signals})
+			if len(s.series) > seriesLimit {
+				s.series = s.series[len(s.series)-seriesLimit:]
+			}
+		}
 	}()
 
 	obsCtx, cancel := context.WithTimeout(ctx, c.cfg.Interval)
@@ -200,6 +240,7 @@ func (c *Controller) tick(ctx context.Context, s *service) {
 	}
 	current := len(live)
 	st.Replicas = current
+	observed = true
 
 	perReplica := c.collect(obsCtx, s, live, log)
 	if c.rec != nil {
@@ -402,4 +443,90 @@ func (c *Controller) Statuses() []Status {
 		out[i] = s.status
 	}
 	return out
+}
+
+// Series returns the recent ticks of a service, oldest first, from since on.
+func (c *Controller) Series(service string, since time.Time) ([]Point, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	s := c.find(service)
+	if s == nil {
+		return nil, false
+	}
+	i := sort.Search(len(s.series), func(i int) bool { return !s.series[i].At.Before(since) })
+	return append([]Point(nil), s.series[i:]...), true
+}
+
+// Profile returns a copy of a service's learned load profile, if it has one.
+func (c *Controller) Profile(service string) (*memory.ProfileState, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	s := c.find(service)
+	if s == nil || s.profile == nil {
+		return nil, false
+	}
+	return s.profile, true
+}
+
+// Report analyzes a service's recent decisions (the ones kept for /history).
+func (c *Controller) Report(service string) (memory.Report, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	s := c.find(service)
+	if s == nil {
+		return memory.Report{}, false
+	}
+	now := c.now()
+	since := now
+	if len(s.recent) > 0 {
+		since = s.recent[0].Decision.At
+	}
+	return memory.Analyze(s.recent, s.cfg, since, now), true
+}
+
+func (c *Controller) find(service string) *service {
+	for _, s := range c.svcs {
+		if s.cfg.Name == service {
+			return s
+		}
+	}
+	return nil
+}
+
+// ServiceView is the safe-to-publish part of a service's config plus its
+// latest status. Image, env, labels and connection URLs (which can hold
+// credentials) are deliberately left out.
+type ServiceView struct {
+	Name     string          `json:"name"`
+	Min      int             `json:"min"`
+	Max      int             `json:"max"`
+	Metrics  []config.Metric `json:"metrics"`
+	Model    string          `json:"model"`
+	Prewarm  bool            `json:"prewarm"`
+	Behavior config.Behavior `json:"behavior"`
+	Status   Status          `json:"status"`
+}
+
+// Overview is the UI's landing data.
+type Overview struct {
+	Now      time.Time     `json:"now"`
+	Interval time.Duration `json:"interval"`
+	DryRun   bool          `json:"dry_run"`
+	Memory   bool          `json:"memory"`
+	Banner   string        `json:"banner,omitempty"`
+	Services []ServiceView `json:"services"`
+}
+
+func (c *Controller) Overview() Overview {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	o := Overview{Now: c.now(), Interval: c.cfg.Interval, DryRun: c.cfg.DryRun, Memory: c.mem != nil, Banner: c.banner}
+	for _, s := range c.svcs {
+		o.Services = append(o.Services, ServiceView{
+			Name: s.cfg.Name, Min: s.cfg.Min, Max: s.cfg.Max, Metrics: s.cfg.Metrics,
+			Model: s.cfg.Model.Kind, Prewarm: s.cfg.History.Prewarm, Behavior: s.cfg.Behavior,
+			Status: s.status,
+		})
+	}
+	return o
 }

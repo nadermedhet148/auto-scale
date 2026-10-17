@@ -6,6 +6,21 @@ Notable changes to dockscale. The reasoning behind design choices is in
 ## Unreleased
 
 ### Added
+- **Web UI** at `/ui/` (`/` redirects there), see [docs/ui.md](docs/ui.md) and
+  [0014](docs/decisions/0014-embedded-read-only-ui.md):
+  - Overview: stat tiles, latest reasoning, a replicas chart, and per-metric
+    charts (measured, estimate, history, target).
+  - Decisions: verdict counts, tuning advice, a graded decision table.
+  - Load profile: per-slot mean ± σ with a "now" marker.
+  - Hover crosshair and tooltip, keyboard navigation, table view, light and
+    dark themes, and a responsive layout.
+  - JSON endpoints `/api/overview`, `/api/series`, `/api/report`,
+    `/api/profile`, `/api/history`. The config is sanitized, so URLs and env
+    are never published.
+- `cmd/dockscale-demo`: the real controller, memory and UI against a fake
+  Docker with synthetic load.
+- `config.Parse`, `Controller.SetClock`, `Controller.Tick` and
+  `Controller.SetBanner`.
 - **Runtime memory** (`memory.dir`), see [docs/memory.md](docs/memory.md):
   - Learned state is snapshotted to `state-<service>.json` (models, cooldowns,
     stabilization window, load profile) and restored at startup. Short-term
@@ -24,7 +39,16 @@ Notable changes to dockscale. The reasoning behind design choices is in
 - Architecture decision records in `docs/decisions/`, this changelog, and
   `CLAUDE.md`.
 
+### Fixed
+- State snapshots could fail on Windows with "Access is denied" when another
+  process (antivirus, the indexer) briefly held the file. The rename is now
+  retried. Found by running the demo.
+- `/api/*` JSON is compact (the UI polls it); `/status` and `/history` stay
+  indented.
+
 ### Changed
+- `config.Metric` and `config.Behavior` have JSON tags, and `memory.Report`
+  now includes `ups` and `downs` in JSON.
 - Holt-Winters seasons are aligned to the wall clock, so they survive gaps and
   restarts. `model.Estimator.Update` now takes the sample time.
   ([0011](docs/decisions/0011-wall-clock-aligned-seasonality.md))

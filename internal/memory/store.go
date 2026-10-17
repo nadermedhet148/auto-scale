@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync"
+	"time"
 )
 
 const journalFile = "journal.jsonl"
@@ -72,7 +73,21 @@ func (s *Store) SaveState(service string, v any) error {
 	if err := os.WriteFile(tmp, b, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return renameRetry(tmp, path)
+}
+
+// renameRetry renames with a few short retries. On Windows, replacing a file
+// fails with "Access is denied" while another process (antivirus, the search
+// indexer) briefly holds the target open; on Linux the first attempt succeeds.
+func renameRetry(from, to string) error {
+	var err error
+	for i := range 6 {
+		if err = os.Rename(from, to); err == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(5<<i) * time.Millisecond) // 5ms … 160ms
+	}
+	return err
 }
 
 // LoadState reads the service's state into v. found is false if none exists.

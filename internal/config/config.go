@@ -96,8 +96,8 @@ type Template struct {
 }
 
 type Metric struct {
-	Type   string  `yaml:"type"`
-	Target float64 `yaml:"target"`
+	Type   string  `yaml:"type" json:"type"`
+	Target float64 `yaml:"target" json:"target"`
 }
 
 // Prometheus points at Traefik's metrics endpoint.
@@ -114,13 +114,14 @@ type Queue struct {
 	VHost string `yaml:"vhost"` // RabbitMQ only, default "/"
 }
 
+// Behavior durations serialize to JSON as nanoseconds, like all time.Duration.
 type Behavior struct {
-	Tolerance              float64       `yaml:"tolerance"`
-	ScaleUpCooldown        time.Duration `yaml:"scale_up_cooldown"`
-	ScaleDownCooldown      time.Duration `yaml:"scale_down_cooldown"`
-	ScaleDownStabilization time.Duration `yaml:"scale_down_stabilization"`
-	MaxStepUp              int           `yaml:"max_step_up"`
-	MaxStepDown            int           `yaml:"max_step_down"`
+	Tolerance              float64       `yaml:"tolerance" json:"tolerance"`
+	ScaleUpCooldown        time.Duration `yaml:"scale_up_cooldown" json:"scale_up_cooldown"`
+	ScaleDownCooldown      time.Duration `yaml:"scale_down_cooldown" json:"scale_down_cooldown"`
+	ScaleDownStabilization time.Duration `yaml:"scale_down_stabilization" json:"scale_down_stabilization"`
+	MaxStepUp              int           `yaml:"max_step_up" json:"max_step_up"`
+	MaxStepDown            int           `yaml:"max_step_down" json:"max_step_down"`
 }
 
 type Model struct {
@@ -141,11 +142,20 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	c, err := Parse(b)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return c, nil
+}
+
+// Parse decodes, defaults and validates a YAML config.
+func Parse(b []byte) (*Config, error) {
 	var c Config
 	dec := yaml.NewDecoder(bytes.NewReader(b))
 	dec.KnownFields(true)
 	if err := dec.Decode(&c); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return nil, fmt.Errorf("parse: %w", err)
 	}
 	c.applyDefaults()
 	if err := c.validate(); err != nil {

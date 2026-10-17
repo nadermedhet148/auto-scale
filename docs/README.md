@@ -8,6 +8,7 @@
 | [Statistical models](models.md) | The maths behind the outlier filter, EWMA, Holt and Holt-Winters, plus a tuning guide |
 | [Scaling policy](policy.md) | How a replica count is chosen: target tracking, tolerance, cooldowns, stabilization |
 | [Memory](memory.md) | What dockscale remembers (learned state, graded decisions, load profiles) and how it uses that for future decisions |
+| [Web UI](ui.md) | The built-in dashboard: views, charts, the demo, the API behind it |
 | [Replay and tuning](replay.md) | Recording load, simulating policies offline and reading the results |
 | [Operations](operations.md) | Deploying, the full configuration reference, endpoints, failure modes and limits |
 
