@@ -1,0 +1,38 @@
+# A queue worker scaled on backlog: no HTTP, no Traefik.
+interval: 10s
+listen: ":9090"
+
+services:
+  - name: worker
+    min: 1
+    max: 20
+    template:
+      image: myorg/worker:latest   # replace with your worker image
+      network: dockscale_net
+      cpus: 1
+      memory: 256m
+      stop_timeout: 30s            # let in-flight jobs finish
+      env:
+        - REDIS_URL=redis://redis:6379/0
+
+    metrics:
+      - type: queue_depth   # pending messages per replica
+        target: 100
+      - type: cpu
+        target: 80
+
+    queue:
+      kind: redis_list                # or rabbitmq
+      url: redis://redis:6379/0       # rabbitmq: http://guest:guest@rabbitmq:15672
+      name: jobs                      # list key / queue name
+      # vhost: "/"                    # rabbitmq only
+
+    behavior:
+      scale_up_cooldown: 20s
+      scale_down_cooldown: 3m
+      scale_down_stabilization: 10m
+      max_step_up: 5
+
+    model:
+      kind: ewma
+      alpha: 0.6

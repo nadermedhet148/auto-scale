@@ -1,0 +1,53 @@
+interval: 10s      # control loop period
+listen: ":9090"    # /status, /metrics, /healthz
+dry_run: false
+# Variant of ../dockscale.yaml used by dockscale-replay to compare models.
+
+services:
+  - name: web
+    min: 2
+    max: 20
+
+    # How to create one replica. Traefik discovers replicas through these labels.
+    template:
+      image: traefik/whoami:latest
+      network: dockscale_net
+      cpus: 0.5          # CPU % below is relative to this limit
+      memory: 128m
+      stop_timeout: 10s  # grace period for in-flight requests on scale-down
+      labels:
+        traefik.enable: "true"
+        traefik.http.routers.web.rule: "PathPrefix(`/`)"
+        traefik.http.routers.web.entrypoints: web
+        traefik.http.services.web.loadbalancer.server.port: "80"
+
+    # Each metric gives a replica count; the largest wins.
+    metrics:
+      - type: cpu          # % of the per-replica CPU limit
+        target: 60
+      - type: rps          # requests/sec per replica
+        target: 50
+      - type: latency_p95  # milliseconds
+        target: 200
+
+    prometheus:
+      url: http://traefik:8082/metrics
+      service: web@docker
+
+    behavior:
+      tolerance: 0.1                 # ignore deviations within ±10% of target
+      scale_up_cooldown: 30s
+      scale_down_cooldown: 2m
+      scale_down_stabilization: 5m   # scale down to the max recommendation in this window
+      max_step_up: 4
+      max_step_down: 1
+
+    model:
+      kind: holt_winters  # raw | ewma | holt | holt_winters
+      alpha: 0.5          # level smoothing
+      beta: 0.3           # trend smoothing (holt only)
+      gamma: 0.2          # seasonal smoothing
+      season_length: 24h  # one daily cycle
+      horizon: 3          # forecast this many intervals ahead (holt only)
+      outlier_k: 3.5      # clamp samples beyond k·MAD from the rolling median; -1 disables
+      outlier_window: 6

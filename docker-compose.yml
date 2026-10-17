@@ -1,0 +1,37 @@
+# Demo stack: Traefik load balancer + dockscale. dockscale creates the
+# `web` replicas itself; they are not declared here.
+name: dockscale-demo
+
+services:
+  traefik:
+    image: traefik:v3.1
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=dockscale_net
+      - --entrypoints.web.address=:80
+      - --entrypoints.metrics.address=:8082
+      - --metrics.prometheus=true
+      - --metrics.prometheus.entrypoint=metrics
+      - --metrics.prometheus.addservicelabels=true
+      # Default buckets (0.1,0.3,1.2,5) are too coarse for a useful p95.
+      - --metrics.prometheus.buckets=0.025,0.05,0.1,0.15,0.2,0.25,0.3,0.5,1,2.5,5
+    ports:
+      - "8080:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [dockscale_net]
+
+  dockscale:
+    build: .
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./examples/dockscale.yaml:/etc/dockscale/dockscale.yaml:ro
+    ports:
+      - "9090:9090"
+    networks: [dockscale_net]
+    depends_on: [traefik]
+
+networks:
+  dockscale_net:
+    name: dockscale_net
